@@ -106,6 +106,24 @@ The Render service is connected to this repository's `main` branch and auto-depl
 
 The current public demo has no application-level authentication, durable data store, audit service, live sensor/API ingestion, or certified test-equipment integration. Do not use it for confidential or production data. Before private/industrial use, deploy behind an approved identity provider or equivalent access control, enforce HTTPS and network restrictions, define data retention and audit policies, and configure health monitoring, resource limits and rollback procedures. The public Render allow-list is not a substitute for authentication.
 
+### Optional OIDC login for a protected deployment
+
+The app supports Streamlit OIDC sign-in when configured by the deployment owner. Add the following structure to the hosting platform's Streamlit secrets (do not commit real credentials):
+
+```toml
+[app]
+require_login = true
+
+[auth]
+redirect_uri = "https://YOUR-DEPLOYMENT-HOSTNAME/oauth2callback"
+cookie_secret = "REPLACE_WITH_A_LONG_RANDOM_SECRET"
+client_id = "YOUR_IDENTITY_PROVIDER_CLIENT_ID"
+client_secret = "YOUR_IDENTITY_PROVIDER_CLIENT_SECRET"
+server_metadata_url = "https://YOUR-IDP-DOMAIN/.well-known/openid-configuration"
+```
+
+Register the exact callback URL with your identity provider and verify login/logout using a non-privileged test account before handling private data. Keep `require_login` false or omit the `[app]` section only for an intentionally public synthetic-data demo. This optional gate does not replace role-based authorization, retention controls or an organizational security review.
+
 ## Method and limitations
 
 This is a **statistical anomaly-scoring heuristic**, not a trained or validated failure-prediction model. The engine summarizes component changes, variability, peak-to-peak range and time rates, calculates robust deviations across the current dataset, averages selected deviations and applies a configurable percentile cutoff. Sampling-gap checks are treated as data-quality warnings rather than a component-fault score.
