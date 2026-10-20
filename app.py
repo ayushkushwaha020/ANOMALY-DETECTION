@@ -254,7 +254,7 @@ try:
     limits = get_engineering_limits(limits_enabled)
     readings, validation = validate_readings(raw_data)
     analyzed, summary, threshold = score_anomalies(readings, percentile=float(percentile))
-    analyzed, summary = apply_engineering_limits(readings, summary, limits)
+    analyzed, summary = apply_engineering_limits(analyzed, summary, limits)
 except DataValidationError as exc:
     st.error(f"**Data validation failed:** {exc}")
     st.info("Correct the CSV headers, values, duplicate readings or component coverage, then retry.")
