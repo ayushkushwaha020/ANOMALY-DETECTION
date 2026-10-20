@@ -32,7 +32,6 @@ FEATURE_COLUMNS = (
     "temperature_peak_to_peak_c",
     "current_peak_to_peak_a",
     "voltage_peak_to_peak_v",
-    "sampling_gap_max_min",
 )
 
 
