@@ -1,111 +1,107 @@
-# CODE.KAISEN — Component Anomaly Detection MVP
+# CODE.KAISEN — Component Burn-in Anomaly Detection
 
-AI-assisted component anomaly detection for burn-in and screening analysis.
+An explainable screening-support prototype for **SIH Problem Statement 26170: AI Driven Anomaly Detection in Component Burn-In and Screening**.
 
-## Working Links
+## Links
 
-- **Live Demo:** https://anomaly-detection-xxmd.onrender.com
-- **GitHub Repository:** https://github.com/ayushkushwaha020/ANOMALY-DETECTION
+- **Live demo:** https://code-kaisen-anamoly-detection.streamlit.app/
+- **GitHub:** https://github.com/ayushkushwaha020/ANOMALY-DETECTION
 
-## SIH Ideas Details
+## What it does
 
-- **SIH Problem Statement:** SIH26170
-- **Problem Statement:** AI Driven Anomaly Detection in Component Burn-In and Screening
-- **Submission:** Smart India Hackathon (SIH) Ideas
-- **Selection Pool:** 500 ideas
-
-This project was submitted independently under SIH Ideas. The **DX TECHIES** team credits are **not** attributed to this project.
-
-## What It Does
-
-This Streamlit prototype analyzes burn-in readings using:
-
-- Temperature
-- Current
-- Voltage
-- Time-trend features
-
-It flags unusual behavior for engineer review. A flag is **not** a confirmation of component failure, and final screening decisions remain with the engineer.
-
-## Prototype Method
-
-The MVP uses a lightweight, explainable approach:
-
-- Robust statistical deviation using median/MAD
-- Time-trend features across multiple parameters
-- Combined anomaly scoring
-- Automatic screening threshold based on the 90th percentile of prototype scores
-
-The MVP intentionally avoids SciPy and scikit-learn dependencies.
+- Starts with deterministic synthetic data or accepts a burn-in CSV upload.
+- Validates schema, numeric readings, component identifiers, timestamps, duplicate readings, and minimum readings per component.
+- Extracts per-component temperature/current/voltage changes and time rates.
+- Produces a robust, relative anomaly score and configurable percentile cutoff.
+- Shows overview, flagged components, component trends, data quality, and CSV exports.
+- Labels flags as **potential anomalies for engineer review**, not confirmed defects.
 
 ## Architecture
 
 ```text
-CSV / Demo Data
-      │
-      ▼
-Data Validation & Cleaning
-      │
-      ▼
-Per-Component Feature Extraction
-      │
-      ├── Temperature change / rate
-      ├── Current change / rate
-      └── Voltage variation / rate
-      │
-      ▼
-Robust Multi-Parameter Scoring
-      │
-      ▼
-90th-Percentile Screening Threshold
-      │
-      ├── Normal
-      └── Potential anomaly → Engineer review
-      │
-      ▼
-Interactive Streamlit Dashboard
-      │
-      └── CSV reports / analyzed readings
+Synthetic demo / CSV upload
+          |
+          v
+Schema + value validation
+          |
+          v
+Per-component feature extraction
+          |
+          v
+Robust statistical deviation score
+          |
+          v
+Configurable percentile triage cutoff
+          |
+          v
+Streamlit dashboard + CSV exports
 ```
 
-## CSV Format
+## CSV format
 
-Required columns:
+Required header:
 
-`component_id,time_min,temperature_c,current_a,voltage_v`
+```csv
+component_id,time_min,temperature_c,current_a,voltage_v
+C0001,0,48.0,0.80,5.00
+C0001,1,48.2,0.802,5.00
+C0001,2,48.4,0.804,5.01
+```
 
-A sample dataset is included in `sample_burnin_data.csv`.
+Requirements:
+- At least two readings per component.
+- Non-negative numeric `time_min`.
+- At most one row per component/time pair.
+- All required numeric measurements must be finite and present.
+- Rows are sorted by component and time before analysis.
+- Maximum accepted dataset size: 1,000,000 rows in the engine; upload size is also limited by deployment configuration.
 
-## Features
+## Run locally
 
-- Demo burn-in dataset for immediate exploration
-- CSV upload for custom burn-in readings
-- Screening overview
-- Potential anomaly list
-- Per-component analysis
-- Temperature/current/voltage trend visualization
-- Engineer-review indicators
-- Downloadable flagged-component report
-- Downloadable screening report
-- Downloadable analyzed readings
+Python 3.12 is recommended.
 
-## Run Locally
+```bash
+python -m venv .venv
+# Windows PowerShell:
+.venv\\Scripts\\Activate.ps1
+# macOS/Linux:
+# source .venv/bin/activate
 
-```powershell
 python -m pip install -r requirements.txt
-python -m streamlit run app.py
+streamlit run app.py
 ```
 
-## Deployment
+Open the local URL printed by Streamlit (normally http://localhost:8501).
 
-Deployed as a Streamlit application on Render.
+## Run tests
 
-The Render service is configured for automatic deployment from the `main` branch.
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+python -m compileall -q app.py anomaly_engine.py
+```
 
-## Validation Note
+GitHub Actions runs tests and compilation checks for Python 3.11 and 3.12 on pushes and pull requests to `main`.
 
-The repository contains a deterministic demo dataset and an interactive upload path. The live deployment should be treated as a prototype demonstration rather than a production component-screening system.
+## Run with Docker
 
-## Disclaimer
+```bash
+docker build -t code-kaisen .
+docker run --rm -p 8501:8501 code-kaisen
+```
 
-This is a **prototype/MVP for screening and decision support**. An anomaly flag does not establish that a component is defective. Engineering validation and review are required before any production decision.
+Then open http://localhost:8501.
+
+## Deployment notes
+
+The existing Streamlit Community Cloud app is connected to this repository's `main` branch and `app.py` entrypoint. Commits to `main` trigger redeployment while the configured app URL remains the same. The app may sleep on free Community Cloud when inactive; code changes do not remove host-level sleep limits.
+
+The included Dockerfile is an additional deployment option for a container host. A production host should provide HTTPS, resource limits, health monitoring, controlled access, and a defined update/rollback process.
+
+## Method and limitations
+
+This is a **statistical anomaly-scoring heuristic**, not a trained or validated failure-prediction model. Scores are relative to the current dataset, are not probabilities, and have no accuracy claim. The percentile setting controls triage volume; it is not a validated pass/fail threshold.
+
+The current app does not provide user authentication, persistent data storage, an audit trail, live sensor/API ingestion, or certified integration with test equipment. Synthetic demo readings are not industrial evidence. See [MODEL_CARD.md](MODEL_CARD.md) before interpreting results.
+
+**Safety:** An anomaly flag does not establish that a component is defective. Do not use this prototype as the sole basis for safety-critical, compliance, or production pass/fail decisions. Maintain approved screening limits and require qualified engineering review.
