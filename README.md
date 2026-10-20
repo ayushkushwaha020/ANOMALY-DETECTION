@@ -1,20 +1,26 @@
-# CODE.KAISEN — Component Burn-in Anomaly Detection
+# CODE.KAISEN — Component Burn-in Anomaly Screening
 
 An explainable screening-support prototype for **SIH Problem Statement 26170: AI Driven Anomaly Detection in Component Burn-In and Screening**.
 
 ## Links
 
-- **Live demo:** https://code-kaisen-anamoly-detection.streamlit.app/
-- **GitHub:** https://github.com/ayushkushwaha020/ANOMALY-DETECTION
+- **Primary demo (Render):** https://anomaly-detection-xxmd.onrender.com/
+- **Backup demo (Streamlit Community Cloud):** https://code-kaisen-anamoly-detection.streamlit.app/
+- **Source code:** https://github.com/ayushkushwaha020/ANOMALY-DETECTION
 
-## What it does
+Free hosting may sleep or cold-start after inactivity. The public demo has no user authentication; **use synthetic data only and do not upload confidential, customer, or production test data**.
 
-- Starts with deterministic synthetic data or accepts a burn-in CSV upload.
-- Validates schema, numeric readings, component identifiers, timestamps, duplicate readings, and minimum readings per component.
-- Extracts per-component temperature/current/voltage changes and time rates.
-- Produces a robust, relative anomaly score and configurable percentile cutoff.
-- Shows overview, flagged components, component trends, data quality, and CSV exports.
-- Labels flags as **potential anomalies for engineer review**, not confirmed defects.
+## Current capabilities
+
+- Deterministic synthetic demo dataset and CSV upload.
+- Schema and numeric validation; rejects missing/non-finite values, duplicate component/time pairs, empty IDs and insufficient per-component readings.
+- Sampling-gap and constant-channel warnings to help identify data-quality problems.
+- Per-component trend, spread, peak-to-peak, change and maximum rate features.
+- Robust, dataset-relative anomaly screening with configurable percentile cutoff.
+- Optional user-supplied lower/upper engineering limits, kept separate from relative statistical flags. Only use limits approved for the specific component and test profile.
+- Separate parameter charts with physical units, a review queue, top feature-contribution explanations and CSV exports.
+- Reproducibility metadata JSON containing app/engine version, UTC timestamp, input SHA-256 fingerprint, row/component counts and screening settings.
+- Regression tests, GitHub Actions CI, Docker support and a model/method card.
 
 ## Architecture
 
@@ -22,19 +28,20 @@ An explainable screening-support prototype for **SIH Problem Statement 26170: AI
 Synthetic demo / CSV upload
           |
           v
-Schema + value validation
+CSV schema + value validation
+          |
+          +------> Data-quality warnings
           |
           v
-Per-component feature extraction
+Per-component time-series feature extraction
           |
           v
-Robust statistical deviation score
+Robust relative-deviation scoring
+          |
+          +------> Optional approved absolute-limit checks
           |
           v
-Configurable percentile triage cutoff
-          |
-          v
-Streamlit dashboard + CSV exports
+Explainable review queue + charts + reproducible exports
 ```
 
 ## CSV format
@@ -48,13 +55,14 @@ C0001,1,48.2,0.802,5.00
 C0001,2,48.4,0.804,5.01
 ```
 
-Requirements:
+Rules:
 - At least two readings per component.
 - Non-negative numeric `time_min`.
 - At most one row per component/time pair.
-- All required numeric measurements must be finite and present.
+- Required numeric values must be finite and present.
 - Rows are sorted by component and time before analysis.
-- Maximum accepted dataset size: 1,000,000 rows in the engine; upload size is also limited by deployment configuration.
+- Engine limit: 1,000,000 rows. App upload limit: 25 MB.
+- Units and approved engineering limits must match the actual test setup. The app does not infer or certify units from the CSV.
 
 ## Run locally
 
@@ -81,7 +89,7 @@ python -m pytest -q
 python -m compileall -q app.py anomaly_engine.py
 ```
 
-GitHub Actions runs tests and compilation checks for Python 3.11 and 3.12 on pushes and pull requests to `main`.
+GitHub Actions runs tests and compilation checks on Python 3.11 and 3.12 for pushes and pull requests to `main`. Verify the latest workflow run before describing CI as passing.
 
 ## Run with Docker
 
@@ -92,16 +100,37 @@ docker run --rm -p 8501:8501 code-kaisen
 
 Then open http://localhost:8501.
 
-## Deployment notes
+## Deployment and security
 
-The existing Streamlit Community Cloud app is connected to this repository's `main` branch and `app.py` entrypoint. Commits to `main` trigger redeployment while the configured app URL remains the same. The app may sleep on free Community Cloud when inactive; code changes do not remove host-level sleep limits.
+The Render service is connected to this repository's `main` branch and auto-deploys commits to that branch. The Streamlit Community Cloud URL is retained as a backup. The included Dockerfile is another deployment option.
 
-The included Dockerfile is an additional deployment option for a container host. A production host should provide HTTPS, resource limits, health monitoring, controlled access, and a defined update/rollback process.
+The current public demo has no application-level authentication, durable data store, audit service, live sensor/API ingestion, or certified test-equipment integration. Do not use it for confidential or production data. Before private/industrial use, deploy behind an approved identity provider or equivalent access control, enforce HTTPS and network restrictions, define data retention and audit policies, and configure health monitoring, resource limits and rollback procedures. The public Render allow-list is not a substitute for authentication.
+
+### Optional OIDC login for a protected deployment
+
+The app supports Streamlit OIDC sign-in when configured by the deployment owner. Add the following structure to the hosting platform's Streamlit secrets (do not commit real credentials):
+
+Set the hosting environment variable `CODE_KAISEN_REQUIRE_LOGIN=true`, then configure these OIDC secrets:
+
+```toml
+[auth]
+redirect_uri = "https://YOUR-DEPLOYMENT-HOSTNAME/oauth2callback"
+cookie_secret = "REPLACE_WITH_A_LONG_RANDOM_SECRET"
+client_id = "YOUR_IDENTITY_PROVIDER_CLIENT_ID"
+client_secret = "YOUR_IDENTITY_PROVIDER_CLIENT_SECRET"
+server_metadata_url = "https://YOUR-IDP-DOMAIN/.well-known/openid-configuration"
+```
+
+Register the exact callback URL with your identity provider and verify login/logout using a non-privileged test account before handling private data. Leave `CODE_KAISEN_REQUIRE_LOGIN` unset only for an intentionally public synthetic-data demo. This optional gate does not replace role-based authorization, retention controls or an organizational security review.
 
 ## Method and limitations
 
-This is a **statistical anomaly-scoring heuristic**, not a trained or validated failure-prediction model. Scores are relative to the current dataset, are not probabilities, and have no accuracy claim. The percentile setting controls triage volume; it is not a validated pass/fail threshold.
+This is a **statistical anomaly-scoring heuristic**, not a trained or validated failure-prediction model. The engine summarizes component changes, variability, peak-to-peak range and time rates, calculates robust deviations across the current dataset, averages selected deviations and applies a configurable percentile cutoff. Sampling-gap checks are treated as data-quality warnings rather than a component-fault score.
 
-The current app does not provide user authentication, persistent data storage, an audit trail, live sensor/API ingestion, or certified integration with test equipment. Synthetic demo readings are not industrial evidence. See [MODEL_CARD.md](MODEL_CARD.md) before interpreting results.
+Scores are dataset-relative, are not probabilities and have no measured accuracy claim. The percentile is a triage setting, not a validated pass/fail threshold. The optional engineering-limit check only evaluates limits that a user explicitly supplies; the software cannot determine whether those limits are correct or approved.
 
-**Safety:** An anomaly flag does not establish that a component is defective. Do not use this prototype as the sole basis for safety-critical, compliance, or production pass/fail decisions. Maintain approved screening limits and require qualified engineering review.
+The synthetic demo data is for interface demonstration only. No remaining-useful-life estimate, confirmed-defect determination or industrial performance guarantee is provided.
+
+**Safety:** “Potential anomaly” means review required. “No statistical flag” does **not** mean the component passed. Maintain approved screening procedures and require qualified engineering review. Never use this prototype as the sole basis for safety-critical, compliance or production pass/fail decisions.
+
+See [MODEL_CARD.md](MODEL_CARD.md) for the method card and validation requirements.
