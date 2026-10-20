@@ -31,7 +31,10 @@ MAX_UPLOAD_MB = 25
 # Optional OIDC authentication. Configure Streamlit's [auth] secrets on the
 # hosting platform and set require_login=true to gate access to uploaded data.
 AUTH_CONFIGURED = "auth" in st.secrets
-AUTH_REQUIRED = bool(st.secrets["auth"].get("require_login", False)) if AUTH_CONFIGURED else False
+AUTH_REQUIRED = bool(st.secrets["app"].get("require_login", False)) if "app" in st.secrets else False
+if AUTH_REQUIRED and not AUTH_CONFIGURED:
+    st.error("Authentication is required but OIDC [auth] secrets are not configured. Ask the deployment owner to configure the identity provider.")
+    st.stop()
 if AUTH_REQUIRED and not st.user.is_logged_in:
     st.title("CODE.KAISEN — Sign in required")
     st.info("This deployment requires an approved identity-provider login before any data can be accessed.")
