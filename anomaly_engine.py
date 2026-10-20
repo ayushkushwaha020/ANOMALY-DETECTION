@@ -53,7 +53,7 @@ def validate_readings(data: pd.DataFrame) -> tuple[pd.DataFrame, ValidationRepor
     if missing:
         raise DataValidationError("Missing required column(s): " + ", ".join(missing))
 
-    frame = data.loc[:, REQUIRED_COLUMNS].copy()
+    frame = data.loc[:, list(REQUIRED_COLUMNS)].copy()
     frame["component_id"] = frame["component_id"].astype("string").str.strip()
     if frame["component_id"].isna().any() or frame["component_id"].eq("").any():
         raise DataValidationError("Every row must have a non-empty component_id.")
