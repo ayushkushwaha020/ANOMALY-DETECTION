@@ -27,6 +27,16 @@ st.set_page_config(
 APP_VERSION = "1.1.0"
 ENGINE_VERSION = "1.1.0"
 MAX_UPLOAD_MB = 25
+
+# Optional OIDC authentication. Configure Streamlit's [auth] secrets on the
+# hosting platform and set require_login=true to gate access to uploaded data.
+AUTH_CONFIGURED = "auth" in st.secrets
+AUTH_REQUIRED = bool(st.secrets["auth"].get("require_login", False)) if AUTH_CONFIGURED else False
+if AUTH_REQUIRED and not st.user.is_logged_in:
+    st.title("CODE.KAISEN — Sign in required")
+    st.info("This deployment requires an approved identity-provider login before any data can be accessed.")
+    st.button("Sign in", on_click=st.login)
+    st.stop()
 PARAMETERS = {
     "temperature_c": ("Temperature", "°C"),
     "current_a": ("Current", "A"),
@@ -191,6 +201,11 @@ def build_report_metadata(
 with st.sidebar:
     st.markdown("## ⚡ CODE.KAISEN")
     st.caption("Burn-in & screening intelligence")
+    if AUTH_REQUIRED:
+        st.caption("Authenticated session")
+        st.button("Sign out", on_click=st.logout)
+    elif not AUTH_CONFIGURED:
+        st.warning("Public demo: do not upload confidential or production data.")
     st.divider()
     source = st.radio("Data source", ["Synthetic demo", "Upload CSV"], index=0)
     uploaded_file = None
