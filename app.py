@@ -1,161 +1,283 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
 import io
-import math
+
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="CODE.KAISEN | Component Anomaly Detection", page_icon="⚡", layout="wide")
+from anomaly_engine import (
+    DataValidationError,
+    REQUIRED_COLUMNS,
+    score_anomalies,
+    validate_readings,
+)
 
-st.title("CODE.KAISEN — Component Anomaly Detection")
-st.caption("AI-assisted burn-in & screening analysis • SIH PS 26170 • Prototype MVP")
+st.set_page_config(
+    page_title="CODE.KAISEN | Burn-in Intelligence",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-@st.cache_data
-def demo_data(n=80, points=20, seed=42):
-    rng=np.random.default_rng(seed)
-    rows=[]
-    for c in range(n):
-        cid=f"C{c+1:04d}"
-        abnormal=c in [11,27,53,68]
-        bt=rng.normal(48,2); bc=rng.normal(.80,.05); bv=rng.normal(5,.03)
+APP_VERSION = "1.0.0"
+
+@st.cache_data(show_spinner=False)
+def demo_data(components: int = 80, points: int = 20, seed: int = 42) -> pd.DataFrame:
+    """Create repeatable synthetic data for demos; this is not real test data."""
+    rng = np.random.default_rng(seed)
+    rows = []
+    abnormal_indices = {11, 27, 53, 68}
+    for c in range(components):
+        component_id = f"C{c + 1:04d}"
+        is_synthetic_outlier = c in abnormal_indices
+        base_temp = rng.normal(48, 2)
+        base_current = rng.normal(0.80, 0.05)
+        base_voltage = rng.normal(5.0, 0.03)
         for t in range(points):
-            temp=bt+.18*t+rng.normal(0,.35)
-            cur=bc+.002*t+rng.normal(0,.008)
-            vol=bv+rng.normal(0,.008)
-            if abnormal and t>10:
-                temp+=(t-10)*.55
-                cur+=(t-10)*.010
-                vol+=rng.normal(0,.035)
-            rows.append([cid,t,temp,cur,vol])
-    return pd.DataFrame(rows,columns=["component_id","time_min","temperature_c","current_a","voltage_v"])
+            temperature = base_temp + 0.18 * t + rng.normal(0, 0.35)
+            current = base_current + 0.002 * t + rng.normal(0, 0.008)
+            voltage = base_voltage + rng.normal(0, 0.008)
+            if is_synthetic_outlier and t > 10:
+                temperature += (t - 10) * 0.55
+                current += (t - 10) * 0.010
+                voltage += rng.normal(0, 0.035)
+            rows.append([component_id, float(t), temperature, current, voltage])
+    return pd.DataFrame(rows, columns=REQUIRED_COLUMNS)
 
-def robust_z(series):
-    s=pd.to_numeric(series, errors="coerce").fillna(0).to_numpy(dtype=float)
-    med=np.median(s)
-    mad=np.median(np.abs(s-med))
-    if mad < 1e-12:
-        sd=np.std(s)
-        return np.abs((s-med)/(sd+1e-9))
-    return np.abs((s-med)/(1.4826*mad+1e-9))
 
-def score_anomalies(df):
-    # Lightweight, explainable prototype:
-    # robust deviation + time-derivative deviation across multiple parameters.
-    x=df.copy()
-    g=x.groupby("component_id")
-    x["temp_rate"]=g["temperature_c"].transform(lambda s:s.diff().fillna(0))
-    x["current_rate"]=g["current_a"].transform(lambda s:s.diff().fillna(0))
-    x["voltage_rate"]=g["voltage_v"].transform(lambda s:s.diff().fillna(0))
+def to_csv_bytes(frame: pd.DataFrame) -> bytes:
+    return frame.to_csv(index=False, lineterminator="\n").encode("utf-8")
 
-    component_features=x.groupby("component_id").agg(
-        temp_mean=("temperature_c","mean"),
-        temp_max=("temperature_c","max"),
-        temp_change=("temperature_c",lambda s:float(s.iloc[-1]-s.iloc[0])),
-        current_mean=("current_a","mean"),
-        current_change=("current_a",lambda s:float(s.iloc[-1]-s.iloc[0])),
-        voltage_std=("voltage_v","std"),
-        temp_rate_max=("temp_rate","max"),
-        current_rate_max=("current_rate","max"),
-        voltage_rate_max=("voltage_rate","max")
-    ).fillna(0).reset_index()
 
-    cols=["temp_change","current_change","voltage_std","temp_rate_max","current_rate_max","voltage_rate_max"]
-    scores=np.zeros(len(component_features))
-    for c in cols:
-        scores += robust_z(component_features[c])
-    scores /= len(cols)
-    component_features["anomaly_score"]=scores
-    threshold=float(np.quantile(scores, 0.90))
-    component_features["status"]=np.where(scores>=threshold,"Potential anomaly","Normal")
-    return x, component_features.sort_values("anomaly_score",ascending=False), threshold
+def fmt(value: float, digits: int = 3) -> str:
+    return f"{float(value):,.{digits}f}"
+
 
 with st.sidebar:
-    st.header("Data")
-    upload=st.file_uploader("Upload burn-in CSV",type=["csv"])
-    st.caption("Required: component_id, time_min, temperature_c, current_a, voltage_v")
+    st.markdown("## ⚡ CODE.KAISEN")
+    st.caption("Burn-in & screening intelligence")
     st.divider()
-    st.write("Prototype method")
-    st.caption("Robust multi-parameter + time-trend anomaly scoring. No SciPy or scikit-learn required.")
+    source = st.radio("Data source", ["Synthetic demo", "Upload CSV"], index=0)
+    uploaded_file = None
+    if source == "Upload CSV":
+        uploaded_file = st.file_uploader(
+            "Upload burn-in readings",
+            type=["csv"],
+            help="Required columns: " + ", ".join(REQUIRED_COLUMNS),
+        )
+        st.caption("CSV only. Max upload size is configured by the deployment.")
+    percentile = st.slider(
+        "Screening cutoff percentile",
+        min_value=80,
+        max_value=98,
+        value=90,
+        step=1,
+        help="Higher cutoffs flag fewer components. This is a triage setting, not model accuracy.",
+    )
+    st.divider()
+    st.markdown("**Analysis method**")
+    st.caption("Robust statistical deviation across multi-parameter and time-rate features.")
+    st.caption(f"Version {APP_VERSION}")
 
-df=pd.read_csv(upload) if upload else demo_data()
-required=["component_id","time_min","temperature_c","current_a","voltage_v"]
-missing=[c for c in required if c not in df.columns]
-if missing:
-    st.error("Missing columns: "+", ".join(missing))
+st.title("Component Burn-in Anomaly Detection")
+st.caption("SIH PS 26170 • Explainable screening support • Engineer remains the decision-maker")
+
+if source == "Upload CSV":
+    if uploaded_file is None:
+        st.info("Upload a CSV file to begin, or switch to Synthetic demo to explore the dashboard.")
+        st.stop()
+    try:
+        raw_data = pd.read_csv(uploaded_file)
+    except (UnicodeDecodeError, pd.errors.ParserError, ValueError) as exc:
+        st.error(f"Could not read this CSV: {exc}")
+        st.stop()
+else:
+    raw_data = demo_data()
+
+try:
+    readings, validation = validate_readings(raw_data)
+    analyzed, summary, threshold = score_anomalies(readings, percentile=float(percentile))
+except DataValidationError as exc:
+    st.error(f"**Data validation failed:** {exc}")
+    st.info("Check the CSV headers and values, then upload a corrected file. Invalid readings are not silently discarded.")
+    st.stop()
+except (ValueError, TypeError, KeyError, FloatingPointError) as exc:
+    st.error("The dataset could not be analyzed safely.")
+    st.exception(exc)
     st.stop()
 
-df=df[required].copy()
-for c in required[1:]:
-    df[c]=pd.to_numeric(df[c],errors="coerce")
-df=df.dropna().sort_values(["component_id","time_min"]).reset_index(drop=True)
+flagged = summary.loc[summary["status"] == "Potential anomaly"].copy()
+normal_count = int((summary["status"] == "No anomaly flagged").sum())
 
-analyzed, summary, threshold=score_anomalies(df)
+with st.container(border=True):
+    st.markdown("#### Screening snapshot")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Components analyzed", f"{validation.components:,}")
+    m2.metric("Flagged for review", f"{len(flagged):,}")
+    m3.metric("Readings analyzed", f"{len(analyzed):,}")
+    m4.metric("Cutoff score", fmt(threshold, 3))
+    st.caption(
+        f"Rows validated: {validation.rows_used:,} of {validation.rows_received:,} · "
+        f"Cutoff: {percentile}th percentile · Generated: "
+        f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
+    )
 
-a,b,c,d=st.columns(4)
-a.metric("Components analyzed",len(summary))
-b.metric("Potential anomalies",int((summary.status=="Potential anomaly").sum()))
-c.metric("Normal",int((summary.status=="Normal").sum()))
-d.metric("Readings analyzed",len(analyzed))
+for warning in validation.warnings:
+    st.warning(warning)
 
-tab1,tab2,tab3,tab4,tab5=st.tabs(["Overview","Flagged components","Component analysis","Trends","Export"])
+if source == "Synthetic demo":
+    st.info(
+        "You are viewing deterministic synthetic demonstration data. "
+        "It does not represent real components or validated industrial test results."
+    )
 
-with tab1:
-    st.subheader("Screening overview")
-    st.dataframe(summary.head(15),use_container_width=True,hide_index=True)
-    st.info("An anomaly indicates behavior that differs from the learned/robust baseline in this prototype. It is not a declaration that a component is defective; engineer review is required.")
+st.warning(
+    "A potential anomaly is a review signal, not a confirmed defect or a prediction of failure. "
+    "Do not use this prototype as the sole basis for pass/fail, safety, or production decisions."
+)
 
-with tab2:
+overview_tab, flagged_tab, component_tab, trends_tab, export_tab = st.tabs(
+    ["Overview", "Flagged components", "Component analysis", "Trends", "Export & data quality"]
+)
+
+with overview_tab:
+    left, right = st.columns([1.4, 1])
+    with left:
+        st.subheader("Highest anomaly scores")
+        view_cols = [
+            "component_id", "status", "anomaly_score",
+            "temperature_change_c", "current_change_a", "voltage_std_v",
+        ]
+        st.dataframe(
+            summary[view_cols].head(15).rename(columns={
+                "component_id": "Component ID",
+                "status": "Screening status",
+                "anomaly_score": "Anomaly score",
+                "temperature_change_c": "Temperature change (°C)",
+                "current_change_a": "Current change (A)",
+                "voltage_std_v": "Voltage variation (V)",
+            }),
+            use_container_width=True,
+            hide_index=True,
+        )
+    with right:
+        st.subheader("Screening status")
+        status_counts = summary["status"].value_counts().reindex(
+            ["Potential anomaly", "No anomaly flagged"], fill_value=0
+        )
+        st.bar_chart(status_counts)
+        st.caption("Counts depend on the uploaded dataset and selected cutoff.")
+
+with flagged_tab:
     st.subheader("Potentially anomalous components")
     st.caption("Flagged for engineer review — these components are not confirmed defective.")
-    flagged=summary.loc[summary["status"]=="Potential anomaly", [
-        "component_id","anomaly_score","temp_change","current_change",
-        "voltage_std","temp_rate_max","current_rate_max","voltage_rate_max"
-    ]].copy()
-    flagged=flagged.rename(columns={
-        "component_id":"Component ID",
-        "anomaly_score":"Anomaly score",
-        "temp_change":"Temperature change (°C)",
-        "current_change":"Current change (A)",
-        "voltage_std":"Voltage variation (V)",
-        "temp_rate_max":"Max temperature rise/step",
-        "current_rate_max":"Max current rise/step",
-        "voltage_rate_max":"Max voltage change/step"
+    display_columns = [
+        "component_id", "anomaly_score", "temperature_change_c", "current_change_a",
+        "voltage_std_v", "temperature_rate_max_c_per_min",
+        "current_rate_max_a_per_min", "voltage_rate_max_v_per_min",
+    ]
+    flagged_view = flagged[display_columns].rename(columns={
+        "component_id": "Component ID",
+        "anomaly_score": "Anomaly score",
+        "temperature_change_c": "Temperature change (°C)",
+        "current_change_a": "Current change (A)",
+        "voltage_std_v": "Voltage variation (V)",
+        "temperature_rate_max_c_per_min": "Max |temperature rate| (°C/min)",
+        "current_rate_max_a_per_min": "Max |current rate| (A/min)",
+        "voltage_rate_max_v_per_min": "Max |voltage rate| (V/min)",
     })
-    st.metric("Components flagged for review", len(flagged))
-    st.dataframe(flagged, use_container_width=True, hide_index=True)
-    st.download_button("Download flagged components", flagged.to_csv(index=False).encode(),
-                       "CODE.KAISEN_flagged_components.csv", "text/csv")
+    if flagged_view.empty:
+        st.success("No components exceeded the selected cutoff. This does not prove all components are healthy.")
+    else:
+        st.dataframe(flagged_view, use_container_width=True, hide_index=True)
+        st.download_button(
+            "Download flagged components CSV",
+            data=to_csv_bytes(flagged_view),
+            file_name="CODE.KAISEN_flagged_components.csv",
+            mime="text/csv",
+            use_container_width=False,
+        )
 
-with tab3:
-    selected=st.selectbox("Select component",summary.component_id.tolist())
-    s=analyzed[analyzed.component_id==selected]
-    rec=summary[summary.component_id==selected].iloc[0]
-    x,y,z=st.columns(3)
-    x.metric("Status",rec.status)
-    y.metric("Anomaly score",f"{rec.anomaly_score:.2f}")
-    z.metric("Screening threshold",f"{threshold:.2f}")
-    st.line_chart(s.set_index("time_min")[["temperature_c","current_a","voltage_v"]])
+with component_tab:
+    component_ids = summary["component_id"].astype(str).tolist()
+    selected_id = st.selectbox("Choose a component", component_ids)
+    series = analyzed.loc[analyzed["component_id"].astype(str) == selected_id].sort_values("time_min")
+    record = summary.loc[summary["component_id"].astype(str) == selected_id].iloc[0]
+    x, y, z = st.columns(3)
+    x.metric("Screening status", str(record["status"]))
+    y.metric("Anomaly score", fmt(record["anomaly_score"], 3))
+    z.metric("Cutoff score", fmt(threshold, 3))
+    st.line_chart(series.set_index("time_min")[["temperature_c", "current_a", "voltage_v"]])
+    st.caption("Parameters use different physical units; inspect individual trend charts before comparing magnitudes.")
+    st.markdown("**Component measurements**")
+    st.dataframe(series, use_container_width=True, hide_index=True)
 
-    st.write("**Why it was flagged (prototype indicators):**")
-    reasons=[]
-    if s.temperature_c.iloc[-1]-s.temperature_c.iloc[0] > 8:
-        reasons.append("Temperature shows a strong rise across the test.")
-    if s.current_a.iloc[-1]-s.current_a.iloc[0] > .12:
-        reasons.append("Current shows noticeable drift.")
-    if s.voltage_v.std() > .02:
-        reasons.append("Voltage varies more than the typical stable pattern.")
-    if not reasons:
-        reasons.append("The combined multi-parameter/time-trend pattern differs from the baseline.")
-    for r in reasons:
-        st.write("• "+r)
+with trends_tab:
+    selected_component = st.selectbox(
+        "Component for trend inspection",
+        summary["component_id"].astype(str).tolist(),
+        key="trend_component",
+    )
+    selected_parameter = st.selectbox(
+        "Measurement",
+        ["temperature_c", "current_a", "voltage_v"],
+        format_func=lambda v: {
+            "temperature_c": "Temperature (°C)",
+            "current_a": "Current (A)",
+            "voltage_v": "Voltage (V)",
+        }[v],
+    )
+    trend_data = analyzed.loc[
+        analyzed["component_id"].astype(str) == selected_component
+    ].sort_values("time_min")
+    st.line_chart(trend_data.set_index("time_min")[[selected_parameter]])
+    st.markdown("**Cross-component feature distribution**")
+    feature = st.selectbox(
+        "Feature",
+        ["temperature_change_c", "current_change_a", "voltage_std_v", "anomaly_score"],
+        format_func=lambda v: {
+            "temperature_change_c": "Temperature change (°C)",
+            "current_change_a": "Current change (A)",
+            "voltage_std_v": "Voltage variation (V)",
+            "anomaly_score": "Anomaly score",
+        }[v],
+    )
+    st.bar_chart(summary.set_index("component_id")[[feature]].sort_values(feature, ascending=False).head(20))
 
-with tab4:
-    metric=st.selectbox("Parameter",["temperature_c","current_a","voltage_v"])
-    comp=st.selectbox("Component",summary.component_id.tolist(),key="trend")
-    st.line_chart(analyzed[analyzed.component_id==comp].set_index("time_min")[[metric]])
-
-with tab5:
-    st.download_button("Download screening report",summary.to_csv(index=False).encode(),"CODE.KAISEN_screening_report.csv","text/csv")
-    st.download_button("Download analyzed readings",analyzed.to_csv(index=False).encode(),"CODE.KAISEN_analyzed_readings.csv","text/csv")
+with export_tab:
+    st.subheader("Export results")
+    st.write("Download the analyzed component summary or readings with calculated time rates.")
+    st.download_button(
+        "Download complete screening report",
+        data=to_csv_bytes(summary),
+        file_name="CODE.KAISEN_screening_report.csv",
+        mime="text/csv",
+    )
+    st.download_button(
+        "Download analyzed readings",
+        data=to_csv_bytes(analyzed),
+        file_name="CODE.KAISEN_analyzed_readings.csv",
+        mime="text/csv",
+    )
+    st.download_button(
+        "Download validated input data",
+        data=to_csv_bytes(readings),
+        file_name="CODE.KAISEN_validated_readings.csv",
+        mime="text/csv",
+    )
+    st.subheader("Data quality")
+    q1, q2, q3 = st.columns(3)
+    q1.metric("Rows received", validation.rows_received)
+    q2.metric("Rows analyzed", validation.rows_used)
+    q3.metric("Components", validation.components)
+    st.write("Required schema")
+    st.code(",".join(REQUIRED_COLUMNS), language="text")
+    st.caption("Input validation rejects invalid or duplicate component/time readings rather than silently dropping them.")
 
 st.divider()
-st.caption("CODE.KAISEN prototype • Final screening decisions remain with the engineer.")
+st.caption(
+    "CODE.KAISEN • Prototype screening support • No real-time sensor connection, "
+    "persistence, authentication, or validated failure-prediction model is implied by this version."
+)
