@@ -166,6 +166,8 @@ def score_anomalies(
     score_matrix = np.column_stack(
         [_robust_deviation(features[column].to_numpy(dtype=float)) for column in score_columns]
     )
+    for index, feature_name in enumerate(score_columns):
+        features[f"deviation_{feature_name}"] = score_matrix[:, index]
     features["anomaly_score"] = score_matrix.mean(axis=1)
     threshold = float(np.percentile(features["anomaly_score"], percentile))
     features["status"] = np.where(
