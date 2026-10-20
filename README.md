@@ -110,10 +110,9 @@ The current public demo has no application-level authentication, durable data st
 
 The app supports Streamlit OIDC sign-in when configured by the deployment owner. Add the following structure to the hosting platform's Streamlit secrets (do not commit real credentials):
 
-```toml
-[app]
-require_login = true
+Set the hosting environment variable `CODE_KAISEN_REQUIRE_LOGIN=true`, then configure these OIDC secrets:
 
+```toml
 [auth]
 redirect_uri = "https://YOUR-DEPLOYMENT-HOSTNAME/oauth2callback"
 cookie_secret = "REPLACE_WITH_A_LONG_RANDOM_SECRET"
@@ -122,7 +121,7 @@ client_secret = "YOUR_IDENTITY_PROVIDER_CLIENT_SECRET"
 server_metadata_url = "https://YOUR-IDP-DOMAIN/.well-known/openid-configuration"
 ```
 
-Register the exact callback URL with your identity provider and verify login/logout using a non-privileged test account before handling private data. Keep `require_login` false or omit the `[app]` section only for an intentionally public synthetic-data demo. This optional gate does not replace role-based authorization, retention controls or an organizational security review.
+Register the exact callback URL with your identity provider and verify login/logout using a non-privileged test account before handling private data. Leave `CODE_KAISEN_REQUIRE_LOGIN` unset only for an intentionally public synthetic-data demo. This optional gate does not replace role-based authorization, retention controls or an organizational security review.
 
 ## Method and limitations
 
