@@ -26,7 +26,7 @@ st.set_page_config(
 
 APP_VERSION = "1.1.0"
 ENGINE_VERSION = "1.1.0"
-MAX_UPLOAD_MB = 100
+MAX_UPLOAD_MB = 25
 PARAMETERS = {
     "temperature_c": ("Temperature", "°C"),
     "current_a": ("Current", "A"),
