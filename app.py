@@ -104,8 +104,8 @@ except DataValidationError as exc:
     st.info("Check the CSV headers and values, then upload a corrected file. Invalid readings are not silently discarded.")
     st.stop()
 except (ValueError, TypeError, KeyError, FloatingPointError) as exc:
-    st.error("The dataset could not be analyzed safely.")
-    st.exception(exc)
+    st.error("The dataset could not be analyzed safely. Check the file format and numeric values, then retry.")
+    st.caption(f"Diagnostic category: {type(exc).__name__}")
     st.stop()
 
 flagged = summary.loc[summary["status"] == "Potential anomaly"].copy()
@@ -211,6 +211,24 @@ with component_tab:
     z.metric("Cutoff score", fmt(threshold, 3))
     st.line_chart(series.set_index("time_min")[["temperature_c", "current_a", "voltage_v"]])
     st.caption("Parameters use different physical units; inspect individual trend charts before comparing magnitudes.")
+    st.markdown("**Largest contributors to this component's score**")
+    contribution_columns = [f"deviation_{name}" for name in (
+        "temperature_change_c", "current_change_a", "voltage_std_v",
+        "temperature_rate_max_c_per_min", "current_rate_max_a_per_min",
+        "voltage_rate_max_v_per_min",
+    )]
+    available_contributions = [name for name in contribution_columns if name in summary.columns]
+    contributions = record[available_contributions].sort_values(ascending=False).head(3)
+    contribution_labels = {
+        "deviation_temperature_change_c": "Temperature change",
+        "deviation_current_change_a": "Current change",
+        "deviation_voltage_std_v": "Voltage variation",
+        "deviation_temperature_rate_max_c_per_min": "Temperature rate",
+        "deviation_current_rate_max_a_per_min": "Current rate",
+        "deviation_voltage_rate_max_v_per_min": "Voltage rate",
+    }
+    for name, value in contributions.items():
+        st.write(f"• **{contribution_labels.get(name, name)}** — robust deviation score {float(value):.2f}")
     st.markdown("**Component measurements**")
     st.dataframe(series, use_container_width=True, hide_index=True)
 
